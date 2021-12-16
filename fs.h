@@ -1,6 +1,7 @@
 #include <iostream>
 #include <cstdint>
 #include "disk.h"
+#include <vector>
 
 #ifndef __FS_H__
 #define __FS_H__
@@ -16,6 +17,8 @@
 #define WRITE 0x02
 #define EXECUTE 0x01
 
+#define DIR_ENTRY_MAX 63
+
 struct dir_entry {
     char file_name[56]; // name of the file / sub-directory
     uint32_t size; // size of the file in bytes
@@ -24,12 +27,28 @@ struct dir_entry {
     uint8_t access_rights; // read (0x04), write (0x02), execute (0x01)
 };
 
+struct dir {
+    uint8_t size; // number of entries
+    bool map[63]; //keeps track which entry spots are free
+    dir_entry entries[63]; //spots for entiries in directory. max 63 entries for blocksize of 4096
+};
+
 class FS {
 private:
     Disk disk;
     // size of a FAT entry is 2 bytes
     int16_t fat[BLOCK_SIZE/2];
 
+    dir shellDir;
+    int shellBlock;
+    std::vector<std::string> shellPath;
+
+    bool SplitPath(std::string filePath, std::vector<std::string> &tokens);
+    int FindEntry(dir *directory, std::string name);
+    int GetFreeBlock();
+    void RemoveBlocks(int first);
+    bool DirMarch(dir *directory, std::vector<std::string> &path, bool ignoreLast, int &dirBlockReturn);
+    
 public:
     FS();
     ~FS();

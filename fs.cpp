@@ -457,7 +457,7 @@ FS::cp(std::string sourcepath, std::string destpath)
         std::cout << "Error: Source is a directory" << std::endl;
         return 0;
     }
-    if ((srcDir->entries[srcIndex].access_rights & READ))
+    if (!(srcDir->entries[srcIndex].access_rights & READ))
     {
         std::cout << "Error: Source has no read access" << std::endl;
         return 0;
@@ -666,7 +666,7 @@ FS::rm(std::string filepath)
         std::cout << "Error: Filepath does not exist" << std::endl;
         return 0;
     }
-    if ((currentDir->entries[index].access_rights & WRITE))
+    if (!(currentDir->entries[index].access_rights & WRITE))
     {
         std::cout << "Error: You have no write/edit right over the file" << std::endl;
         return 0;
@@ -803,7 +803,6 @@ FS::append(std::string filepath1, std::string filepath2)
         disk.read(destBlock, blockDest);
         buffer.append(destContent);
         buffer.append(srcContent);
-        std::cout << buffer << std::endl;
 
         if ((buffer.length() + 1 > BLOCK_SIZE))
         {

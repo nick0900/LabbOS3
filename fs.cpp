@@ -52,11 +52,11 @@ bool FS::SplitPath(std::string filePath, std::vector<std::string> &tokens)
     size_t pos = 0;
     std::string token;
     while ((pos = filePath.find(delimiter)) != std::string::npos) {
-        
+
         token = filePath.substr(0, pos);
-        
+
         tokens.push_back(token);
-        
+
         filePath.erase(0, pos + delimiter.length());
 
         if (tokens[tokens.size() - 1].length() >= 56)
@@ -86,7 +86,7 @@ int FS::FindEntry(dir *directory, std::string name)
         {
             index++;
         }
-        
+
         if (strcmp(name.c_str(), directory->entries[index].file_name) == 0)
         {
             return index;
@@ -136,7 +136,7 @@ bool FS::DirMarch(dir *directory, std::vector<std::string> &path, bool ignoreLas
     for (int i = start; i < steps; i++)
     {
         int index = FindEntry(directory, path[i]);
-        
+
         if (index == -1 || directory->entries[index].type == TYPE_FILE)
         {
             std::cout <<"Error: No such dirpath exists" << std::endl;
@@ -199,7 +199,7 @@ FS::create(std::string filepath)
     currentDir->size++;
 
     strcpy(currentDir->entries[index].file_name, path[path.size() - 1].c_str());
-    
+
     currentDir->entries[index].type = TYPE_FILE;
     currentDir->entries[index].access_rights = (READ | WRITE | EXECUTE);
     currentDir->entries[index].size = 0;
@@ -211,7 +211,7 @@ FS::create(std::string filepath)
     }
     currentDir->entries[index].first_blk = blockIndex;
 
-    
+
     std::string fileContent;
     std::string input;
     char byteArr[BLOCK_SIZE];
@@ -223,7 +223,7 @@ FS::create(std::string filepath)
     while (loop)
     {
         std::getline(std::cin, input);
-        
+
         if (input == "")
         {
             loop = false;
@@ -322,15 +322,15 @@ FS::cat(std::string filepath)
         fileContent = "";
         disk.read(blockIndex, reinterpret_cast<uint8_t*>(fileBlock));
         fileContent.append(fileBlock);
-        
+
         std::cout << fileContent;
 
         blockIndex = fat[blockIndex];
 
     } while (blockIndex != FAT_EOF);
-    
+
     std::cout << std::endl;
-    
+
     return 0;
 }
 
@@ -339,7 +339,7 @@ int
 FS::ls()
 {
     uint8_t currentBlock[BLOCK_SIZE];
-    
+
     disk.read(shellBlock, currentBlock);
 
     dir *currentDir = reinterpret_cast<dir*>(currentBlock);
@@ -350,9 +350,9 @@ FS::ls()
     {
         if (currentDir->map[i])
         {
-            std::cout << currentDir->entries[i].file_name 
+            std::cout << currentDir->entries[i].file_name
                     << std::string(59 - strlen(currentDir->entries[i].file_name), ' ');
-            
+
 
             if (currentDir->entries[i].type == TYPE_FILE)
             {
@@ -389,7 +389,7 @@ FS::ls()
             }
 
             std::cout << std::string(11, ' ');
-            
+
 
             if (currentDir->entries[i].type == TYPE_FILE)
             {
@@ -514,7 +514,7 @@ FS::cp(std::string sourcepath, std::string destpath)
         return 0;
     }
     destDir->entries[destIndex].first_blk = destBlock;
-    
+
     disk.read(srcBlock, block);
     disk.write(destBlock, block);
 
@@ -535,7 +535,7 @@ FS::cp(std::string sourcepath, std::string destpath)
 
         srcBlock = fat[srcBlock];
     }
-    
+
     disk.write(currentDirBlock, blockDest);
 
     std::cout << "File copy succesfull\n";
@@ -608,7 +608,7 @@ FS::mv(std::string sourcepath, std::string destpath)
         std::cout << "Error: File of same name already exists in target directory" << std::endl;
         return 0;
     }
-    
+
     int destIndex = 0;
     while (destIndex < DIR_ENTRY_MAX && destDir->map[destIndex] != false)
     {
@@ -631,7 +631,7 @@ FS::mv(std::string sourcepath, std::string destpath)
     destDir->entries[destIndex].size = srcDir->entries[srcIndex].size;
     destDir->entries[destIndex].access_rights = srcDir->entries[srcIndex].access_rights;
     destDir->entries[destIndex].first_blk = srcDir->entries[srcIndex].first_blk;
-    
+
     disk.write(srcDirBlock, blockSrc);
     disk.write(destDirBlock, blockDest);
 
@@ -678,7 +678,7 @@ FS::rm(std::string filepath)
         disk.read(currentDir->entries[index].first_blk, testBlock);
 
         dir *test = reinterpret_cast<dir*>(testBlock);
-        
+
         if (test->size > 1)
         {
             std::cout << "Error: Can't remove nonempty directory" << std::endl;
@@ -695,7 +695,7 @@ FS::rm(std::string filepath)
     currentDir->map[index] = false;
 
     disk.write(currentDirBlock, currentBlock);
-    
+
     std::cout << "Deletion complete" << std::endl;
 
     return 0;
@@ -751,8 +751,9 @@ FS::append(std::string filepath1, std::string filepath2)
     uint8_t blockDest[BLOCK_SIZE];
 
     dir *destDir = reinterpret_cast<dir*>(blockDest);
+    int destDirBlock;
 
-    if (!DirMarch(destDir, pathDest, true, notUsed))
+    if (!DirMarch(destDir, pathDest, true, destDirBlock))
     {
         return 0;
     }
@@ -775,31 +776,34 @@ FS::append(std::string filepath1, std::string filepath2)
         return 0;
     }
 
-    if (srcDir->entries[srcIndex].first_blk > 2)
+    if (!(srcDir->entries[srcIndex].first_blk > 1))
     {
-        std::cout << "Error: source has no content to copy" << std::endl;
+        std::cout << "Error: filepath2 has no content to copy" << std::endl;
         return 0;
     }
 
+    destDir->entries[destIndex].size += srcDir->entries[srcIndex].size - 1;
+    disk.write(destDirBlock, blockDest);
+
     int srcBlock = srcDir->entries[srcIndex].first_blk;
-    std::cout << srcDir->entries[srcIndex].file_name << std::endl;
     int destBlock = destDir->entries[destIndex].first_blk;
     while (fat[destBlock] != FAT_EOF)
     {
         destBlock = fat[srcBlock];
     }
-    
+
     char *srcContent = reinterpret_cast<char*>(blockSrc);
     char *destContent = reinterpret_cast<char*>(blockDest);
 
     std::string buffer;
-    
+
     while (srcBlock != FAT_EOF)
-    {   
+    {
         disk.read(srcBlock, blockSrc);
         disk.read(destBlock, blockDest);
         buffer.append(destContent);
         buffer.append(srcContent);
+        std::cout << buffer << std::endl;
 
         if ((buffer.length() + 1 > BLOCK_SIZE))
         {
@@ -815,6 +819,7 @@ FS::append(std::string filepath1, std::string filepath2)
                 return 0;
             }
         }
+        strcpy(destContent, buffer.c_str());
         disk.write(destBlock, blockDest);
         srcBlock = fat[srcBlock];
     }
@@ -910,7 +915,7 @@ FS::cd(std::string dirpath)
 
     dir currentDir;
     int currentDirBlock;
-    
+
     if (dirpath == "/")
     {
         disk.read(ROOT_BLOCK, reinterpret_cast<uint8_t*>(&currentDir));
@@ -923,7 +928,7 @@ FS::cd(std::string dirpath)
             return 0;
         }
     }
-    
+
 
     shellDir = currentDir;
     shellBlock = currentDirBlock;

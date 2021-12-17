@@ -79,6 +79,7 @@ bool FS::SplitPath(std::string filePath, std::vector<std::string> &tokens)
 int FS::FindEntry(dir *directory, std::string name)
 {
     int index = 0;
+
     for (int i = 0; i < directory->size; i++)
     {
         while (directory->map[index] == false)
@@ -117,10 +118,12 @@ bool FS::DirMarch(dir *directory, std::vector<std::string> &path, bool ignoreLas
         return false;
     }
 
+    int start = 0;
     if (path[0] == "")
     {
         disk.read(ROOT_BLOCK, reinterpret_cast<uint8_t*>(directory));
         dirBlockReturn = ROOT_BLOCK;
+        start = 1;
     }
     else
     {
@@ -130,19 +133,24 @@ bool FS::DirMarch(dir *directory, std::vector<std::string> &path, bool ignoreLas
 
     int steps = path.size() + (ignoreLast ? -1 : 0);
 
-    for (int i = 1; i < steps; i++)
+    for (int i = start; i < steps; i++)
     {
         int index = FindEntry(directory, path[i]);
-
+        
         if (index == -1 || directory->entries[index].type == TYPE_FILE)
         {
             std::cout <<"Error: No such dirpath exists" << std::endl;
             return false;
         }
-
-        disk.read(directory->entries[index].first_blk, reinterpret_cast<uint8_t*>(directory));
+        if (!(directory->entries[index].access_rights & READ))
+        {
+            std::cout <<"Error: Does not have read access to " << directory->entries[index].file_name << std::endl;
+            return false;
+        }
 
         dirBlockReturn = directory->entries[index].first_blk;
+
+        disk.read(directory->entries[index].first_blk, reinterpret_cast<uint8_t*>(directory));
     }
 
     return true;
@@ -191,7 +199,9 @@ FS::create(std::string filepath)
     currentDir->size++;
 
     strcpy(currentDir->entries[index].file_name, path[path.size() - 1].c_str());
+    
     currentDir->entries[index].type = TYPE_FILE;
+    currentDir->entries[index].access_rights = (READ | WRITE | EXECUTE);
     currentDir->entries[index].size = 0;
 
     int blockIndex = GetFreeBlock();
@@ -288,6 +298,11 @@ FS::cat(std::string filepath)
         std::cout << "Error: Filepath does not exist" << std::endl;
         return 0;
     }
+    if (!(currentDir->entries[index].access_rights & READ))
+    {
+        std::cout << "Error: File has no read access rights" << std::endl;
+        return 0;
+    }
     if (currentDir->entries[index].type == TYPE_DIR)
     {
         std::cout << "Error: Target is a directory" << std::endl;
@@ -329,7 +344,7 @@ FS::ls()
 
     dir *currentDir = reinterpret_cast<dir*>(currentBlock);
 
-    std::cout << "name" << std::string(55, ' ') << "type    " << "size\n";
+    std::cout << "name" << std::string(55, ' ') << "type    " << "accessrights  " << "size\n";
 
     for (int i = 0; i < DIR_ENTRY_MAX; i++)
     {
@@ -338,13 +353,51 @@ FS::ls()
             std::cout << currentDir->entries[i].file_name 
                     << std::string(59 - strlen(currentDir->entries[i].file_name), ' ');
             
+
             if (currentDir->entries[i].type == TYPE_FILE)
             {
-                std::cout << "File    " << currentDir->entries[i].size;
+                std::cout << "File    ";
             }
             else
             {
-                std::cout << "Dir     " << "-";
+                std::cout << "Dir     ";
+            }
+
+            if (currentDir->entries[i].access_rights & READ)
+            {
+                std::cout << "r";
+            }
+            else
+            {
+                std::cout << "-";
+            }
+            if (currentDir->entries[i].access_rights & WRITE)
+            {
+                std::cout << "w";
+            }
+            else
+            {
+                std::cout << "-";
+            }
+            if (currentDir->entries[i].access_rights & EXECUTE)
+            {
+                std::cout << "x";
+            }
+            else
+            {
+                std::cout << "-";
+            }
+
+            std::cout << std::string(11, ' ');
+            
+
+            if (currentDir->entries[i].type == TYPE_FILE)
+            {
+                std::cout <<  currentDir->entries[i].size;
+            }
+            else
+            {
+                std::cout << "-";
             }
             std::cout << std::endl;
         }
@@ -404,6 +457,11 @@ FS::cp(std::string sourcepath, std::string destpath)
         std::cout << "Error: Source is a directory" << std::endl;
         return 0;
     }
+    if ((srcDir->entries[srcIndex].access_rights & READ))
+    {
+        std::cout << "Error: Source has no read access" << std::endl;
+        return 0;
+    }
 
     uint8_t blockDest[BLOCK_SIZE];
 
@@ -438,6 +496,7 @@ FS::cp(std::string sourcepath, std::string destpath)
     strcpy(destDir->entries[destIndex].file_name, pathDest[pathDest.size() - 1].c_str());
     destDir->entries[destIndex].type = TYPE_FILE;
     destDir->entries[destIndex].size = srcDir->entries[srcIndex].size;
+    destDir->entries[destIndex].access_rights = srcDir->entries[srcIndex].access_rights;
 
     if (srcDir->entries[srcIndex].first_blk > 2)
     {
@@ -489,7 +548,93 @@ FS::cp(std::string sourcepath, std::string destpath)
 int
 FS::mv(std::string sourcepath, std::string destpath)
 {
-    std::cout << "FS::mv(" << sourcepath << "," << destpath << ")\n";
+    std::vector<std::string> pathSrc;
+
+    if (!SplitPath(sourcepath, pathSrc))
+    {
+        return 0;
+    }
+
+    std::vector<std::string> pathDest;
+
+    if (!SplitPath(destpath, pathDest))
+    {
+        return 0;
+    }
+
+    uint8_t blockSrc[BLOCK_SIZE];
+
+    dir *srcDir = reinterpret_cast<dir*>(blockSrc);
+    int srcDirBlock;
+
+    if (!DirMarch(srcDir, pathSrc, true, srcDirBlock))
+    {
+        return 0;
+    }
+
+    int srcIndex = FindEntry(srcDir, pathSrc[pathSrc.size() - 1]);
+
+    if (srcIndex == -1)
+    {
+        std::cout << "Error: Source filepath does not exist" << std::endl;
+        return 0;
+    }
+    if (!(srcDir->entries[srcIndex].access_rights & READ))
+    {
+        std::cout << "Error: Source has no read access" << std::endl;
+        return 0;
+    }
+
+    uint8_t blockDest[BLOCK_SIZE];
+
+    dir *destDir = reinterpret_cast<dir*>(blockDest);
+    int destDirBlock;
+
+    if (destpath == "/")
+    {
+        disk.read(ROOT_BLOCK, blockDest);
+        destDirBlock = ROOT_BLOCK;
+    }
+    else
+    {
+        if (!DirMarch(destDir, pathDest, false, destDirBlock))
+        {
+            return 0;
+        }
+    }
+
+    if (FindEntry(destDir, srcDir->entries[srcIndex].file_name) != -1)
+    {
+        std::cout << "Error: File of same name already exists in target directory" << std::endl;
+        return 0;
+    }
+    
+    int destIndex = 0;
+    while (destIndex < DIR_ENTRY_MAX && destDir->map[destIndex] != false)
+    {
+        destIndex++;
+    }
+    if(destIndex == DIR_ENTRY_MAX)
+    {
+        std::cout << "Error: Directory full" << std::endl;
+        return 0;
+    }
+
+    srcDir->map[srcIndex] = false;
+    srcDir->size--;
+
+    destDir->map[destIndex] = true;
+    destDir->size++;
+
+    strcpy(destDir->entries[destIndex].file_name, srcDir->entries[srcIndex].file_name);
+    destDir->entries[destIndex].type = srcDir->entries[srcIndex].type;
+    destDir->entries[destIndex].size = srcDir->entries[srcIndex].size;
+    destDir->entries[destIndex].access_rights = srcDir->entries[srcIndex].access_rights;
+    destDir->entries[destIndex].first_blk = srcDir->entries[srcIndex].first_blk;
+    
+    disk.write(srcDirBlock, blockSrc);
+    disk.write(destDirBlock, blockDest);
+
     return 0;
 }
 
@@ -521,6 +666,11 @@ FS::rm(std::string filepath)
         std::cout << "Error: Filepath does not exist" << std::endl;
         return 0;
     }
+    if ((currentDir->entries[index].access_rights & WRITE))
+    {
+        std::cout << "Error: You have no write/edit right over the file" << std::endl;
+        return 0;
+    }
 
     if (currentDir->entries[index].type == TYPE_DIR)
     {
@@ -529,7 +679,7 @@ FS::rm(std::string filepath)
 
         dir *test = reinterpret_cast<dir*>(testBlock);
         
-        if (test->size == 0)
+        if (test->size > 1)
         {
             std::cout << "Error: Can't remove nonempty directory" << std::endl;
             return 0;
@@ -556,7 +706,121 @@ FS::rm(std::string filepath)
 int
 FS::append(std::string filepath1, std::string filepath2)
 {
-    std::cout << "FS::append(" << filepath1 << "," << filepath2 << ")\n";
+    std::vector<std::string> pathSrc;
+
+    if (!SplitPath(filepath1, pathSrc))
+    {
+        return 0;
+    }
+
+    std::vector<std::string> pathDest;
+
+    if (!SplitPath(filepath2, pathDest))
+    {
+        return 0;
+    }
+
+    uint8_t blockSrc[BLOCK_SIZE];
+
+    dir *srcDir = reinterpret_cast<dir*>(blockSrc);
+    int notUsed;
+
+    if (!DirMarch(srcDir, pathSrc, true, notUsed))
+    {
+        return 0;
+    }
+
+    int srcIndex = FindEntry(srcDir, pathSrc[pathSrc.size() - 1]);
+
+    if (srcIndex == -1)
+    {
+        std::cout << "Error: Filepath1 does not exist" << std::endl;
+        return 0;
+    }
+    if (srcDir->entries[srcIndex].type == TYPE_DIR)
+    {
+        std::cout << "Error: Filepath1 is a directory" << std::endl;
+        return 0;
+    }
+    if (!(srcDir->entries[srcIndex].access_rights & READ))
+    {
+        std::cout << "Error: Filepath1 has no read access" << std::endl;
+        return 0;
+    }
+
+    uint8_t blockDest[BLOCK_SIZE];
+
+    dir *destDir = reinterpret_cast<dir*>(blockDest);
+
+    if (!DirMarch(destDir, pathDest, true, notUsed))
+    {
+        return 0;
+    }
+
+    int destIndex = FindEntry(destDir, pathDest[pathDest.size() - 1]);
+
+    if (destIndex == -1)
+    {
+        std::cout << "Error: filepath2 does not exist" << std::endl;
+        return 0;
+    }
+    if (destDir->entries[destIndex].type == TYPE_DIR)
+    {
+        std::cout << "Error: filepath2 is a directory" << std::endl;
+        return 0;
+    }
+    if (!(destDir->entries[destIndex].access_rights & WRITE))
+    {
+        std::cout << "Error: filepath2 has no read access" << std::endl;
+        return 0;
+    }
+
+    if (srcDir->entries[srcIndex].first_blk > 2)
+    {
+        std::cout << "Error: source has no content to copy" << std::endl;
+        return 0;
+    }
+
+    int srcBlock = srcDir->entries[srcIndex].first_blk;
+    std::cout << srcDir->entries[srcIndex].file_name << std::endl;
+    int destBlock = destDir->entries[destIndex].first_blk;
+    while (fat[destBlock] != FAT_EOF)
+    {
+        destBlock = fat[srcBlock];
+    }
+    
+    char *srcContent = reinterpret_cast<char*>(blockSrc);
+    char *destContent = reinterpret_cast<char*>(blockDest);
+
+    std::string buffer;
+    
+    while (srcBlock != FAT_EOF)
+    {   
+        disk.read(srcBlock, blockSrc);
+        disk.read(destBlock, blockDest);
+        buffer.append(destContent);
+        buffer.append(srcContent);
+
+        if ((buffer.length() + 1 > BLOCK_SIZE))
+        {
+            strcpy(destContent, buffer.substr(0, BLOCK_SIZE - 1).c_str());
+            buffer.erase(0, BLOCK_SIZE - 1);
+            disk.write(destBlock, blockDest);
+
+            fat[destBlock] = GetFreeBlock();
+            destBlock = fat[destBlock];
+            if (destBlock == -1)
+            {
+                std::cout << "Error: No free blocks for append" << std::endl;
+                return 0;
+            }
+        }
+        disk.write(destBlock, blockDest);
+        srcBlock = fat[srcBlock];
+    }
+
+    std::cout << "File append succesfull\n";
+
     return 0;
 }
 
@@ -604,6 +868,7 @@ FS::mkdir(std::string dirpath)
 
     strcpy(currentDir->entries[index].file_name, path[path.size() - 1].c_str());
     currentDir->entries[index].type = TYPE_DIR;
+    currentDir->entries[index].access_rights = (READ | WRITE | EXECUTE);
 
     int blockIndex = GetFreeBlock();
     if (blockIndex == -1)
@@ -615,10 +880,15 @@ FS::mkdir(std::string dirpath)
     uint8_t newBlock[BLOCK_SIZE];
     dir *newDir = reinterpret_cast<dir*>(newBlock);
     newDir->map[0] = true;
+    for (int i = 1; i < DIR_ENTRY_MAX; i++)
+    {
+        newDir->map[i] = false;
+    }
     strcpy(newDir->entries[0].file_name, "..");
     newDir->entries[0].type = TYPE_DIR;
+    newDir->entries[0].access_rights = (READ | WRITE | EXECUTE);
     newDir->entries[0].first_blk = currentDirBlock;
-    newDir->size = 0;
+    newDir->size = 1;
 
     disk.write(blockIndex, newBlock);
 
@@ -640,19 +910,27 @@ FS::cd(std::string dirpath)
 
     dir currentDir;
     int currentDirBlock;
-
-    if (!DirMarch(&currentDir, path, false, currentDirBlock))
+    
+    if (dirpath == "/")
     {
-        return 0;
+        disk.read(ROOT_BLOCK, reinterpret_cast<uint8_t*>(&currentDir));
+        currentDirBlock = ROOT_BLOCK;
     }
+    else
+    {
+        if (!DirMarch(&currentDir, path, false, currentDirBlock))
+        {
+            return 0;
+        }
+    }
+    
 
     shellDir = currentDir;
-    std::cout << "hi" << shellDir.size << std::endl;
     shellBlock = currentDirBlock;
 
     if (path[0] == "")
     {
-        shellPath = path;
+        shellPath.clear();
     }
 
     for (std::string entry : path)
@@ -665,6 +943,10 @@ FS::cd(std::string dirpath)
         {
             shellPath.push_back(entry);
         }
+    }
+    if (shellPath[shellPath.size() - 1] == "")
+    {
+        shellPath.pop_back();
     }
 
     return 0;
@@ -688,6 +970,33 @@ FS::pwd()
 int
 FS::chmod(std::string accessrights, std::string filepath)
 {
-    std::cout << "FS::chmod(" << accessrights << "," << filepath << ")\n";
+    std::vector<std::string> path;
+
+    if (!SplitPath(filepath, path))
+    {
+        return 0;
+    }
+
+    uint8_t currentBlock[BLOCK_SIZE];
+
+    dir *currentDir = reinterpret_cast<dir*>(currentBlock);
+    int currentDirBlock;
+
+    if (!DirMarch(currentDir, path, true, currentDirBlock))
+    {
+        return 0;
+    }
+
+    int index = FindEntry(currentDir, path[path.size() - 1]);
+
+    if (index == -1)
+    {
+        std::cout << "Error: Filepath does not exist" << std::endl;
+        return 0;
+    }
+
+    currentDir->entries[index].access_rights = std::stoi(accessrights);
+
+    disk.write(currentDirBlock, currentBlock);
     return 0;
 }

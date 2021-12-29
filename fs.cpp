@@ -26,11 +26,17 @@ FS::format()
     }
 
     dir root;
-    root.size = 0;
-    for (int i = 0; i < DIR_ENTRY_MAX; i++)
+    root.size = 1;
+    root.map[0] = true;
+    for (int i = 1; i < DIR_ENTRY_MAX; i++)
     {
         root.map[i] = false;
     }
+
+    root.entries[0].access_rights = (READ | WRITE |EXECUTE);
+    strcpy(root.entries[0].file_name, "..");
+    root.entries[0].type = TYPE_DIR;
+    root.entries[0].first_blk = ROOT_BLOCK;
 
     uint8_t *bytes = reinterpret_cast<uint8_t*>(&root);
 
@@ -590,26 +596,50 @@ FS::mv(std::string sourcepath, std::string destpath)
     dir *destDir = reinterpret_cast<dir*>(blockDest);
     int destDirBlock;
 
-    if (destpath == "/")
+    if (destpath == "")
     {
         disk.read(ROOT_BLOCK, blockDest);
         destDirBlock = ROOT_BLOCK;
     }
     else
     {
-        if (!DirMarch(destDir, pathDest, false, destDirBlock))
+        if (!DirMarch(destDir, pathDest, true, destDirBlock))
         {
             return 0;
         }
     }
+    bool rename = true;
+    int destIndex = FindEntry(destDir, pathDest[pathDest.size() - 1]);
 
-    if (FindEntry(destDir, srcDir->entries[srcIndex].file_name) != -1)
+    if (destIndex != -1)
     {
-        std::cout << "Error: File of same name already exists in target directory" << std::endl;
-        return 0;
+        if (destDir->entries[destIndex].type == TYPE_DIR)
+        {
+            rename = false;
+            destDirBlock = destDir->entries[destIndex].first_blk;
+            disk.read(destDirBlock, blockDest);
+
+            if (FindEntry(destDir, srcDir->entries[srcIndex].file_name) != -1)
+            {
+                std::cout << "Error: file of same name already exists in dest" << std::endl;
+            }
+        }
+    }
+    else if (pathDest[pathDest.size() - 1] == "")
+    {
+        rename = false;
+        if (FindEntry(destDir, srcDir->entries[srcIndex].file_name) != -1)
+        {
+            std::cout << "Error: file of same name already exists in dest" << std::endl;
+        }
     }
 
-    int destIndex = 0;
+    if (rename && FindEntry(destDir, pathDest[pathDest.size() - 1]) != -1)
+            {
+                std::cout << "Error: file of same name already exists in dest" << std::endl;
+            }
+
+    destIndex = 0;
     while (destIndex < DIR_ENTRY_MAX && destDir->map[destIndex] != false)
     {
         destIndex++;
@@ -620,19 +650,39 @@ FS::mv(std::string sourcepath, std::string destpath)
         return 0;
     }
 
-    srcDir->map[srcIndex] = false;
-    srcDir->size--;
+    if (srcDirBlock == destDirBlock)
+    {
+        destDir->map[srcIndex] = false;
+        destDir->size--;
+    }
+    else
+    {
+        srcDir->map[srcIndex] = false;
+        srcDir->size--;
+    }
+    
 
     destDir->map[destIndex] = true;
     destDir->size++;
 
-    strcpy(destDir->entries[destIndex].file_name, srcDir->entries[srcIndex].file_name);
+    if (rename)
+    {
+        strcpy(destDir->entries[destIndex].file_name, pathDest[pathDest.size() - 1].c_str());
+    }
+    else
+    {
+        strcpy(destDir->entries[destIndex].file_name, srcDir->entries[srcIndex].file_name);
+    }
+    
     destDir->entries[destIndex].type = srcDir->entries[srcIndex].type;
     destDir->entries[destIndex].size = srcDir->entries[srcIndex].size;
     destDir->entries[destIndex].access_rights = srcDir->entries[srcIndex].access_rights;
     destDir->entries[destIndex].first_blk = srcDir->entries[srcIndex].first_blk;
 
-    disk.write(srcDirBlock, blockSrc);
+    if (srcDirBlock != destDirBlock)
+    {
+        disk.write(srcDirBlock, blockSrc);
+    }
     disk.write(destDirBlock, blockDest);
 
     return 0;
@@ -941,14 +991,17 @@ FS::cd(std::string dirpath)
     {
         if (entry == "..")
         {
-            shellPath.pop_back();
+            if (shellPath.size() > 1)
+            {
+                shellPath.pop_back();
+            }
         }
         else
         {
             shellPath.push_back(entry);
         }
     }
-    if (shellPath[shellPath.size() - 1] == "")
+    if (shellPath[shellPath.size() - 1] == "" && shellPath.size() > 1)
     {
         shellPath.pop_back();
     }
